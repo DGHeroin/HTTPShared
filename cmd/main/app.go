@@ -1,13 +1,13 @@
 package main
 
 import (
-	"HTTPShared"
 	"log"
 	"flag"
+	"github.com/DGHeroin/HTTPShared"
+	"os"
 )
 
-func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
+func parseArgs() (string, string) {
 	Addr  := *flag.String("a", ":9999", "Bind Address")
 	Token := *flag.String("t", "", "Auth Token")
 	Help  := *flag.Bool  ("h", false, "Show Usage")
@@ -15,8 +15,15 @@ func main() {
 
 	if Help {
 		flag.Usage()
-		return
+		os.Exit(0)
 	}
+
+	return Addr, Token
+}
+
+func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	Addr, Token := parseArgs()
 
 	web := HTTPShared.NewWebService(Addr, Token)
 	web.WaitExit()

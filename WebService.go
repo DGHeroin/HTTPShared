@@ -10,6 +10,7 @@ import (
 	"fmt"
 )
 
+// WebService
 type WebService struct {
 	shared *Shared
 
@@ -21,6 +22,7 @@ type WebService struct {
 	Route map[string] func(http.ResponseWriter,*http.Request)
 }
 
+// New A WebService
 func NewWebService(addr string, Token string) *WebService {
 	var web WebService
 	web.shared = NewShared()
@@ -35,13 +37,13 @@ func NewWebService(addr string, Token string) *WebService {
 	go web.start()
 	return &web
 }
-
+// Wait Service Exit, When Stop() Been Called
 func (this *WebService) WaitExit()  {
 	select {
 	case <- this.stop:
 	}
 }
-
+// Stop Service
 func (this *WebService) Stop() {
 	go func() {
 		this.stop <- true
@@ -50,29 +52,29 @@ func (this *WebService) Stop() {
 		}
 	}()
 }
-
+// Start HTTP Server
 func (this *WebService) start() {
 	http.HandleFunc("/", this.handleHTTP)
 	this.RegisterRoute()
+	log.Println("Start Service Bind Address ", this.Server.Addr)
 	if err := this.Server.ListenAndServe(); err != nil {
-		log.Println("Http Server ListenAndServe Error:", err)
+		log.Println("Http Server ListenAndServe Error:", err, this.Server.Addr)
 		this.Stop()
 		return
 	}
 }
-
-
+// Response HTTP Standard Error
 func ResponseError(w http.ResponseWriter, code int) {
 	if data, err := json.Marshal(ErrorData{Code:code, Msg:http.StatusText(code)}); err == nil {
 		w.WriteHeader(code)
 		w.Write([]byte(data))
 	}
 }
-
+// Response Custom Error Message
 func ResponseInternalError(w http.ResponseWriter, msg string) {
 	http.Error(w, msg, 500)
 }
-
+// Response A Json
 func ResponseJson(w http.ResponseWriter, i interface{}) (error) {
 	data, err := json.Marshal(i);
 	if  err == nil {
@@ -81,7 +83,7 @@ func ResponseJson(w http.ResponseWriter, i interface{}) (error) {
 	}
 	return err
 }
-
+// HTTP Handle Func
 func (this *WebService) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	route := path.Dir(r.URL.String())
 	if cb, ok := this.Route[route]; ok {
@@ -91,11 +93,11 @@ func (this *WebService) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		ResponseError(w, http.StatusBadRequest)
 	}
 }
-
+// Register Request Route
 func (this *WebService) RegisterRoute() {
 	this.Route["/v1/keys"] = this.v1Keys
 }
-
+// handle "/v1/keys" Route
 func (this *WebService) v1Keys(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	var body []byte
@@ -125,12 +127,16 @@ func (this *WebService) v1Keys(w http.ResponseWriter, r *http.Request) {
 		// get value
 		key := path.Base(r.URL.Path)
 		args := r.URL.Query()
-		isWaiting := false
-		isRepeat := false
+		isWaiting  := false
+		isRepeat   := false
+		withHeader := false
 		if args != nil && args.Get("wait") == "true" {
 			isWaiting = true
 			if args.Get("r") == "true" {
 				isRepeat = true
+			}
+			if args.Get("h") == "true" {
+				withHeader = true
 			}
 		}
 		if isWaiting == false {
@@ -143,15 +149,15 @@ func (this *WebService) v1Keys(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			if isRepeat {
-				this.waitRepeat(w, key)
+				this.waitRepeat(w, key, withHeader)
 			} else {
 				this.waitOneTime(w, key)
 			}
 		}
 	}
 }
-
-func (this* WebService) waitRepeat(w http.ResponseWriter, key string) {
+// Proc Wait Repeat Request
+func (this* WebService) waitRepeat(w http.ResponseWriter, key string, withHeader bool) {
 	ch := make(chan bool)
 	done := make(chan bool)
 
@@ -159,9 +165,22 @@ func (this* WebService) waitRepeat(w http.ResponseWriter, key string) {
 	w.Header().Set("Transfer-Encoding", "chunked")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
-	Id, _ := this.shared.Watch2(key, func(result *Result) bool {
+	Id := this.shared.Watch2(key, func(result *Result) bool {
 		v := GetActionData{Key: result.Key, Value: result.Value, Version: result.Version}
-		ResponseJson(w, &v)
+		data, err := json.Marshal(&v);
+		if  err != nil {
+			return false
+		}
+
+		if withHeader {
+			header := make([]byte, 4)
+			header[0] = byte(len(data) >> 24)
+			header[1] = byte(len(data) >> 16)
+			header[2] = byte(len(data) >> 8)
+			header[3] = byte(len(data) >> 0)
+		}
+
+		w.Write(data)
 		if flusher, ok := w.(http.Flusher); ok {
 			fmt.Fprint(w, "\n") // 需要写入换行符才会真正刷新
 			flusher.Flush()
@@ -180,13 +199,12 @@ func (this* WebService) waitRepeat(w http.ResponseWriter, key string) {
 
 	<-ch
 }
-
-
+// Proc Wait OneTime Request
 func (this* WebService) waitOneTime(w http.ResponseWriter, key string) {
 	ch := make(chan bool)
 	done := make(chan bool)
 
-	Id, _ := this.shared.Watch2(key, func(result *Result) bool {
+	Id := this.shared.Watch2(key, func(result *Result) bool {
 		v := GetActionData{Key: result.Key, Value: result.Value, Version: result.Version}
 		ResponseJson(w, &v)
 		ch <- true
